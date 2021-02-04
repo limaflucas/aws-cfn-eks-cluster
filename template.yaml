@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: Simple EKS cluster template
+
+Parameters:
+  ClusterName:
+    Type: String
+  VpcId:
+    Type: String
+  ClusterSubnetList:
+    Type: CommaDelimitedList
+
+Resources:
+  KmsClusterKey:
+    Type: AWS::KMS::Key
+    Properties: 
+      Description: KMS key to be used by EKS cluster
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: kms-cluster-key-policy
+        Statement:
+          - Sid: Enable IAM users for KMS full access
+            Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::311382889204:root
+            Action: kms:*
+            Resource: '*'
+      PendingWindowInDays: 7
+  
+  EKSDefaultSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: Default security group for EKS cluster
+      GroupName: eks-default-sg
+      SecurityGroupEgress: 
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 10.100.0.0/16
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 172.31.0.0/16
+      VpcId: !Ref VpcId
+
+  EKSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - eks.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+  
+  EKSPodExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - eks-fargate-pods.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+        -  arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy
+
+  EKSDefaultFargateProfile:
+    Type: 'AWS::EKS::FargateProfile'
+    Properties:
+      FargateProfileName: default
+      ClusterName: !Ref EKSCluster
+      PodExecutionRoleArn: !GetAtt EKSPodExecutionRole.Arn
+      Subnets: !Ref ClusterSubnetList
+      Selectors:
+        - Namespace: default
+          Labels:
+            - Key: default
+              Value: default
+
+  EKSCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      EncryptionConfig:
+        - Provider:
+            KeyArn: !GetAtt KmsClusterKey.Arn
+          Resources: 
+            - secrets
+      KubernetesNetworkConfig:
+        ServiceIpv4Cidr: '10.100.0.0/16'
+      Name: !Ref ClusterName
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !Ref EKSDefaultSecurityGroup
+        SubnetIds: !Ref ClusterSubnetList
+      RoleArn: !GetAtt EKSRole.Arn
